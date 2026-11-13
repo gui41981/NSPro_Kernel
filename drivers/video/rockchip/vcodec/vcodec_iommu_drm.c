@@ -741,6 +741,11 @@ static int vcodec_drm_import(struct vcodec_iommu_session_info *session_info,
 	}
 
 	ret = sg_alloc_table(drm_buffer->copy_sgt, sgt->nents, GFP_KERNEL);
+	if (ret) {
+		kfree(drm_buffer->copy_sgt);
+		drm_buffer->copy_sgt = NULL;
+		goto fail_unmap;
+	}
 	s = drm_buffer->copy_sgt->sgl;
 	for_each_sg(sgt->sgl, sg, sgt->nents, i) {
 		sg_set_page(s, sg_page(sg),
@@ -784,6 +789,7 @@ static int vcodec_drm_import(struct vcodec_iommu_session_info *session_info,
 fail_alloc:
 	sg_free_table(drm_buffer->copy_sgt);
 	kfree(drm_buffer->copy_sgt);
+fail_unmap:
 	dma_buf_unmap_attachment(attach, sgt,
 				 DMA_BIDIRECTIONAL);
 fail_detach:
@@ -886,7 +892,7 @@ free_table:
 	kfree(table);
 free_pages:
 	list_for_each_entry_safe(page, tmp_page, &pages, lru)
-		__free_pages(page, 8);
+		__free_pages(page, 1);
 
 	kfree(drm_buffer);
 

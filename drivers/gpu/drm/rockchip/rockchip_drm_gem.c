@@ -63,6 +63,8 @@ static int rockchip_gem_iommu_map(struct rockchip_gem_object *rk_obj)
 	if (ret < rk_obj->base.size) {
 		DRM_ERROR("failed to map buffer: size=%zd request_size=%zd\n",
 			  ret, rk_obj->base.size);
+		if (ret > 0)
+			iommu_unmap(private->domain, rk_obj->dma_addr, ret);
 		ret = -ENOMEM;
 		goto err_remove_node;
 	}
@@ -72,7 +74,9 @@ static int rockchip_gem_iommu_map(struct rockchip_gem_object *rk_obj)
 	return 0;
 
 err_remove_node:
+	mutex_lock(&private->mm_lock);
 	drm_mm_remove_node(&rk_obj->mm);
+	mutex_unlock(&private->mm_lock);
 
 	return ret;
 }
@@ -300,6 +304,7 @@ static int rockchip_gem_alloc_cma(struct rockchip_gem_object *rk_obj)
 					 sizeof(*rk_obj->pages));
 	if (!rk_obj->pages) {
 		DRM_ERROR("failed to allocate pages.\n");
+		ret = -ENOMEM;
 		goto err_sg_table_free;
 	}
 
@@ -366,6 +371,7 @@ static int rockchip_gem_alloc_secure(struct rockchip_gem_object *rk_obj)
 					 sizeof(*rk_obj->pages));
 	if (!rk_obj->pages) {
 		DRM_ERROR("failed to allocate pages.\n");
+		ret = -ENOMEM;
 		goto err_buf_free;
 	}
 
@@ -388,7 +394,8 @@ static int rockchip_gem_alloc_secure(struct rockchip_gem_object *rk_obj)
 err_free_pages:
 	drm_free_large(rk_obj->pages);
 err_buf_free:
-	gen_pool_free(private->secure_buffer_pool, paddr, rk_obj->base.size);
+	gen_pool_free(private->secure_buffer_pool, rk_obj->dma_handle,
+		      rk_obj->base.size);
 
 	return ret;
 }
@@ -606,6 +613,8 @@ rockchip_gem_alloc_object(struct drm_device *drm, unsigned int size)
 		DRM_ERROR("gem buffer size is zero\n");
 		return ERR_PTR(-EINVAL);
 	}
+	if (size > UINT_MAX - (PAGE_SIZE - 1))
+		return ERR_PTR(-EINVAL);
 
 	size = round_up(size, PAGE_SIZE);
 

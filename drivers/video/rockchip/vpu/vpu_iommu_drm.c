@@ -705,6 +705,12 @@ static int vpu_drm_import(struct vpu_iommu_session_info *session_info,
 	}
 
 	ret = sg_alloc_table(drm_buffer->copy_sgt, sgt->nents, GFP_KERNEL);
+	if (ret) {
+		kfree(drm_buffer->copy_sgt);
+		drm_buffer->copy_sgt = NULL;
+		dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+		goto fail_detach;
+	}
 	s = drm_buffer->copy_sgt->sgl;
 	for_each_sg(sgt->sgl, sg, sgt->nents, i) {
 		sg_set_page(s, sg_page(sg),
