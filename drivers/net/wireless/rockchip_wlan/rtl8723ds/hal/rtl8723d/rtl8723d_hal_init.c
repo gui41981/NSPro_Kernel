@@ -5014,7 +5014,7 @@ u8 SetHwReg8723D(PADAPTER padapter, u8 variable, u8 *val)
 		regTmp = 0;
 		if (bShortPreamble)
 			regTmp |= 0x80;
-			rtw_write8(padapter, REG_RRSR + 2, regTmp);
+		rtw_write8(padapter, REG_RRSR + 2, regTmp);
 	}
 		break;
 

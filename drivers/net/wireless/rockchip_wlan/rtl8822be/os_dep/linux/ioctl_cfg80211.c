@@ -396,11 +396,14 @@ struct cfg80211_bss *rtw_cfg80211_inform_bss(_adapter *padapter, struct wlan_net
 	/* _enter_critical_bh(&pwdev_priv->scan_req_lock, &irqL); */
 	if (adapter_wdev_data(padapter)->scan_request != NULL) {
 		u8 *psr = NULL, sr = 0;
-		NDIS_802_11_SSID *pssid = &pnetwork->network.Ssid;
+		NDIS_802_11_SSID ssid;
+		NDIS_802_11_SSID *pssid = &ssid;
 		struct cfg80211_scan_request *request = adapter_wdev_data(padapter)->scan_request;
 		struct cfg80211_ssid *ssids = request->ssids;
 		u32 wpsielen = 0;
 		u8 *wpsie = NULL;
+
+		_rtw_memcpy(pssid, &pnetwork->network.Ssid, sizeof(*pssid));
 
 		wpsie = rtw_get_wps_ie(pnetwork->network.IEs + _FIXED_IE_LENGTH_, pnetwork->network.IELength - _FIXED_IE_LENGTH_, NULL, &wpsielen);
 
