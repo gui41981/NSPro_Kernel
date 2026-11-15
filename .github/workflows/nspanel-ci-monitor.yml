@@ -122,7 +122,7 @@ jobs:
                 fi
                 if [ -s monitor-output/logs/relevant-errors.txt ]; then
                   FIRST="$(head -n 1 monitor-output/logs/relevant-errors.txt)"
-                  echo "- **First matching diagnostic:** `$FIRST`" >> monitor-output/monitor-report.md
+                  echo "- **First matching diagnostic:** $FIRST" >> monitor-output/monitor-report.md
                   if grep -Eqi 'fatal error:|error:|undefined reference|Error [0-9]+' monitor-output/logs/relevant-errors.txt; then
                     echo "- **Initial classification:** source/build failure candidate; inspect the full log context before attributing root cause." >> monitor-output/monitor-report.md
                   elif grep -Eqi 'runner.*lost|timed out|No space left|command not found' monitor-output/logs/relevant-errors.txt; then
