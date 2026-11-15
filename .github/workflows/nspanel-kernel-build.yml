@@ -231,7 +231,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
-            const branch = pr ? pr.head.ref : context.ref.replace(/^refs\\/heads\\//, "");
+            const branch = pr ? pr.head.ref : (context.ref.startsWith("refs/heads/") ? context.ref.slice(11) : context.ref);
             const sourceRepo = (pr && pr.head.repo) ? pr.head.repo.full_name : owner + "/" + repo;
             const parts = sourceRepo.split("/");
             const runUrl = context.serverUrl + "/" + owner + "/" + repo + "/actions/runs/" + context.runId;
