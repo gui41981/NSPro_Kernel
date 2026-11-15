@@ -36,7 +36,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.repository }}
-          EVENT_PATH: ${{ github.event_path }}
           INPUT_RUN_ID: ${{ inputs.run_id }}
         run: |
           set -Eeuo pipefail
@@ -44,7 +43,7 @@ jobs:
           if [ -n "${INPUT_RUN_ID:-}" ]; then
             RUN_ID="$INPUT_RUN_ID"
           else
-            RUN_ID="$(jq -r '.workflow_run.id // empty' "$EVENT_PATH")"
+            RUN_ID="$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH")"
             if [ -z "$RUN_ID" ]; then
               RUN_ID="$(api_get "$API/repos/$TARGET_REPOSITORY/actions/runs?branch=fix%2Frockchip-gem-zero-size&per_page=1" | jq -r '.workflow_runs[0].id // empty')"
             fi
@@ -100,7 +99,7 @@ jobs:
             echo "- **Run:** $RUN_URL"
             echo
             echo "## Jobs"
-            jq -r '.jobs[] | "- **\(.name)** — \(.status) / \(.conclusion // "in progress") — [job](https://github.com/'"$TARGET_REPOSITORY"'/actions/runs/'"$RUN_ID"'/job/\(.id))"' <<<"$JOBS_JSON"
+            jq -r --arg repo "$TARGET_REPOSITORY" --arg run "$RUN_ID" '.jobs[] | "- **" + .name + "** — " + .status + " / " + (.conclusion // "in progress") + " — [job](https://github.com/" + $repo + "/actions/runs/" + $run + "/job/" + (.id|tostring) + ")"' <<<"$JOBS_JSON"
           } > monitor-output/monitor-report.md
 
           jq -r '.jobs[] | [.id, .name, .status, (.conclusion // ""), (.steps // [] | map("\(.name): \(.status)/\(.conclusion // "pending")") | join("; "))] | @tsv' <<<"$JOBS_JSON" > monitor-output/jobs.tsv
@@ -116,7 +115,7 @@ jobs:
                 -o monitor-output/logs/run-logs.zip; then
                 unzip -oq monitor-output/logs/run-logs.zip -d monitor-output/logs/unpacked || true
                 if [ -d monitor-output/logs/unpacked ]; then
-                  grep -RniE -m 30 'fatal error:|(^|[[:space:]])error:|undefined reference|No such file or directory|command not found|No space left|timed out|runner.*lost|cancelled|Error [0-9]+' monitor-output/logs/unpacked > monitor-output/logs/relevant-errors.txt || true
+                  grep -RniE -m 30 'fatal error:|(^|[[:space:]])error:|forbidden warning|undefined reference|No such file or directory|command not found|No space left|timed out|runner.*lost|cancelled|Error [0-9]+' monitor-output/logs/unpacked > monitor-output/logs/relevant-errors.txt || true
                 fi
                 if [ -s monitor-output/logs/relevant-errors.txt ]; then
                   FIRST="$(head -n 1 monitor-output/logs/relevant-errors.txt)"
