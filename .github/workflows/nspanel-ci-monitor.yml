@@ -3,6 +3,8 @@ name: NSPanel CI event monitor
 run-name: "CI monitor — ${{ github.event.workflow_run.run_number || 'manual' }} — ${{ github.event.action || 'manual' }}"
 
 on:
+  push:
+    branches: [main]
   workflow_run:
     workflows: ["NSPanel kernel CI/CD"]
     types: [requested, in_progress, completed]
@@ -43,6 +45,9 @@ jobs:
             RUN_ID="$INPUT_RUN_ID"
           else
             RUN_ID="$(jq -r '.workflow_run.id // empty' "$EVENT_PATH")"
+            if [ -z "$RUN_ID" ]; then
+              RUN_ID="$(api_get "$API/repos/$TARGET_REPOSITORY/actions/runs?branch=fix%2Frockchip-gem-zero-size&per_page=1" | jq -r '.workflow_runs[0].id // empty')"
+            fi
           fi
           test -n "$RUN_ID" || { echo "::error::No workflow run ID in event"; exit 1; }
 
