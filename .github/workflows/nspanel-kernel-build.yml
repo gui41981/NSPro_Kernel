@@ -215,3 +215,94 @@ jobs:
             release-assets/dist/*.tar.gz
             release-assets/dist/*.sha256
             release-assets/dist/manifest.txt
+
+  report:
+    name: Publish complete CI status
+    if: always()
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Report run, jobs, remote branch and artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const branch = pr ? pr.head.ref : context.ref.replace(/^refs\\/heads\\//, "");
+            const sourceRepo = (pr && pr.head.repo) ? pr.head.repo.full_name : owner + "/" + repo;
+            const parts = sourceRepo.split("/");
+            const runUrl = context.serverUrl + "/" + owner + "/" + repo + "/actions/runs/" + context.runId;
+            const jobResults = [
+              ["Source validation", "${{ needs.validate.result }}"],
+              ["Build on dell5300", "${{ needs.build.result }}"]
+            ];
+            let remoteHead = "unavailable";
+            try {
+              const response = await github.rest.repos.getBranch({
+                owner: parts[0], repo: parts[1], branch
+              });
+              remoteHead = response.data.commit.sha;
+            } catch (error) {
+              remoteHead = "unavailable (" + (error.status || "API error") + ": " + error.message + ")";
+            }
+            let jobs = [];
+            try {
+              const response = await github.rest.actions.listJobsForWorkflowRun({
+                owner, repo, run_id: context.runId, filter: "latest"
+              });
+              jobs = response.data.jobs;
+            } catch (error) {
+              core.warning("Could not retrieve job details: " + error.message);
+            }
+            let artifacts = [];
+            try {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: context.runId
+              });
+              artifacts = response.data.artifacts.filter(a => !a.expired);
+            } catch (error) {
+              core.warning("Could not retrieve artifacts: " + error.message);
+            }
+            const summary = core.summary
+              .addHeading("NSPanel kernel CI — complete run report")
+              .addTable([
+                [{data:"Field",header:true},{data:"Value",header:true}],
+                ["Branch", sourceRepo + " / " + branch],
+                ["Requested commit", context.sha],
+                ["Current remote branch HEAD", remoteHead],
+                ["Run", context.runId + " / attempt " + context.runAttempt],
+                ["Run URL", runUrl]
+              ])
+              .addHeading("Required jobs")
+              .addTable([
+                [{data:"Job",header:true},{data:"Result",header:true}],
+                ...jobResults
+              ]);
+            if (jobs.length) {
+              summary.addHeading("Job details")
+                .addTable([
+                  [{data:"Job",header:true},{data:"Status",header:true},{data:"Conclusion",header:true},{data:"Runner",header:true}],
+                  ...jobs.map(j => [j.name, j.status, j.conclusion || "—", j.runner_name || "—"])
+                ]);
+              for (const job of jobs) {
+                const failed = (job.steps || []).filter(s => s.conclusion === "failure");
+                if (failed.length) {
+                  summary.addHeading("Failed steps: " + job.name, 3)
+                    .addList(failed.map(s => s.name + " (step " + s.number + ")"));
+                }
+              }
+            }
+            summary.addHeading("Artifacts");
+            if (artifacts.length) {
+              summary.addTable([
+                [{data:"Artifact",header:true},{data:"Size",header:true},{data:"Download",header:true}],
+                ...artifacts.map(a => [a.name, (a.size_in_bytes / 1048576).toFixed(1) + " MiB", a.archive_download_url])
+              ]);
+            } else {
+              summary.addText("No downloadable artifacts were published for this run.");
+            }
+            summary.addLink("Open full GitHub Actions run", runUrl).write();
+            core.info("Requested SHA: " + context.sha + "; remote HEAD: " + remoteHead);
