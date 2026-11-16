@@ -302,7 +302,7 @@ jobs:
                 ...artifacts.map(a => [a.name, (a.size_in_bytes / 1048576).toFixed(1) + " MiB", a.archive_download_url])
               ]);
             } else {
-              summary.addText("No downloadable artifacts were published for this run.");
+              summary.addRaw("No downloadable artifacts were published for this run.");
             }
             summary.addLink("Open full GitHub Actions run", runUrl).write();
             core.info("Requested SHA: " + context.sha + "; remote HEAD: " + remoteHead);
