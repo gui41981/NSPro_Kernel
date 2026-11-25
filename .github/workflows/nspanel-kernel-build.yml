@@ -27,20 +27,32 @@ jobs:
         shell: bash
         run: |
           set -Eeo pipefail
-          grep -Fqx 'CONFIG_POWERVR_ROGUE_M=y' .config || {
-            echo "::error::The active Rogue M Kbuild target must be enabled in .config"; exit 1;
+          grep -Fqx 'CONFIG_POWERVR_ROGUE_N=y' .config || {
+            echo "::error::The staging PowerVR Rogue driver must be enabled in .config"; exit 1;
           }
-          if grep -Eq '^CONFIG_POWERVR_ROGUE_N=' .config; then
-            echo "::error::Stale, undefined POWERVR_ROGUE_N config symbol remains"; exit 1
-          fi
-          grep -Fq 'source "drivers/gpu/rogue_m/Kconfig"' drivers/video/Kconfig || {
-            echo "::error::Rogue M Kconfig is not sourced by the video configuration"; exit 1;
+          grep -Fqx '# CONFIG_POWERVR_ROGUE_M is not set' .config || {
+            echo "::error::The alternate Rogue M driver must remain disabled for this board configuration"; exit 1;
           }
-          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_M)' drivers/gpu/Makefile || {
-            echo "::error::Rogue M is not wired into drivers/gpu/Makefile"; exit 1;
+          grep -Fqx 'CONFIG_DRM=y' .config || {
+            echo "::error::DRM must be enabled for the PowerVR Rogue DRM glue"; exit 1;
           }
-          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_M) += pvrsrvkm.o' drivers/gpu/rogue_m/Makefile || {
-            echo "::error::Rogue M kernel module target is missing"; exit 1;
+          grep -Fq 'source "drivers/staging/imgtec/Kconfig"' drivers/staging/Kconfig || {
+            echo "::error::The Imagination staging Kconfig is not sourced"; exit 1;
+          }
+          grep -Fq 'source "drivers/staging/imgtec/rogue/Kconfig"' drivers/staging/imgtec/Kconfig || {
+            echo "::error::The staging Rogue Kconfig is not sourced"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_N)' drivers/staging/Makefile || {
+            echo "::error::The staging Rogue directory is not wired into Kbuild"; exit 1;
+          }
+          grep -Fq 'obj-y += rogue/' drivers/staging/imgtec/Makefile || {
+            echo "::error::The staging Rogue subdirectory is not wired into Kbuild"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_N) += pvrsrvkm.o' drivers/staging/imgtec/rogue/Makefile || {
+            echo "::error::The staging Rogue kernel module target is missing"; exit 1;
+          }
+          grep -Fq 'pvrsrvkm-$(CONFIG_DRM) += ../pvr_drm.o' drivers/staging/imgtec/rogue/Makefile || {
+            echo "::error::The PowerVR DRM integration object is missing"; exit 1;
           }
           if [ -n "${{ github.event.pull_request.base.sha || '' }}" ]; then
             git diff --check "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA"
