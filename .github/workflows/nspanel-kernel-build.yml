@@ -27,6 +27,21 @@ jobs:
         shell: bash
         run: |
           set -Eeo pipefail
+          grep -Fqx 'CONFIG_POWERVR_ROGUE_M=y' .config || {
+            echo "::error::The active Rogue M Kbuild target must be enabled in .config"; exit 1;
+          }
+          if grep -Eq '^CONFIG_POWERVR_ROGUE_N=' .config; then
+            echo "::error::Stale, undefined POWERVR_ROGUE_N config symbol remains"; exit 1
+          fi
+          grep -Fq 'source "drivers/gpu/rogue_m/Kconfig"' drivers/video/Kconfig || {
+            echo "::error::Rogue M Kconfig is not sourced by the video configuration"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_M)' drivers/gpu/Makefile || {
+            echo "::error::Rogue M is not wired into drivers/gpu/Makefile"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_M) += pvrsrvkm.o' drivers/gpu/rogue_m/Makefile || {
+            echo "::error::Rogue M kernel module target is missing"; exit 1;
+          }
           if [ -n "${{ github.event.pull_request.base.sha || '' }}" ]; then
             git diff --check "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA"
           elif git rev-parse HEAD^ >/dev/null 2>&1; then
@@ -126,7 +141,7 @@ jobs:
         run: |
           set -Eeo pipefail
           mkdir -p "$TMPDIR"
-          ./NSPanel-compile.sh 2>&1 | tee -a "$NSPANEL_BUILD_LOG"
+          ./NSPanel-compile.sh
       - name: Analyze diagnostics through repository's canonical script
         if: always()
         shell: bash
@@ -185,6 +200,49 @@ jobs:
               echo "- **Errors:** $(grep -Ec 'error:|fatal error:|undefined reference|Error [0-9]+' "$NSPANEL_BUILD_LOG" || true)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish build logs to the target branch
+        if: always() && github.ref == 'refs/heads/fix/rockchip-gem-zero-size'
+        shell: bash
+        run: |
+          set -Eeo pipefail
+          log_files=()
+          for candidate in "${NSPANEL_BUILD_LOG:-}" "${NSPANEL_DIAGNOSTICS:-}"; do
+            [ -n "$candidate" ] || continue
+            case "$candidate" in
+              "$GITHUB_WORKSPACE"/*) candidate="${candidate#"$GITHUB_WORKSPACE"/}" ;;
+            esac
+            if [ -s "$candidate" ]; then
+              log_files+=("$candidate")
+            fi
+          done
+          if [ "${#log_files[@]}" -eq 0 ]; then
+            echo "No build log files were produced; nothing to publish."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f -- "${log_files[@]}"
+          if git diff --cached --quiet; then
+            echo "Build logs are already present on the target branch."
+            exit 0
+          fi
+          git commit -m "ci: archive NSPanel kernel build logs [skip ci]"
+          for attempt in 1 2 3; do
+            git fetch origin fix/rockchip-gem-zero-size
+            if ! git rebase origin/fix/rockchip-gem-zero-size; then
+              git rebase --abort
+              echo "::error::Could not rebase the log archive commit onto the target branch."
+              exit 1
+            fi
+            if git push origin HEAD:refs/heads/fix/rockchip-gem-zero-size; then
+              echo "Published build logs to fix/rockchip-gem-zero-size."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Could not push the build log archive after three attempts."
+          exit 1
+
       - name: Upload logs and deliverables
         if: always()
         uses: actions/upload-artifact@v4
