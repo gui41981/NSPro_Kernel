@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # The single entry point for local and GitHub Actions kernel builds.
 BUILD_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 cd "$BUILD_DIR" || exit 1
@@ -50,12 +50,13 @@ if [ "$CI_MODE" = 1 ]; then
         echo "===== Compiler: $(aarch64-unknown-linux-gnu-gcc -dumpfullversion) ====="
         echo "===== Build policy: one compile pass, no in-build source mutation or retry ====="
     } | tee -a "$LOG_FILE"
-    if ARCH=arm64 CROSS_COMPILE=aarch64-unknown-linux-gnu- make -j3 HOSTCFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89 -fcommon" Image dtbs modules >> "$LOG_FILE" 2>&1; then
-        BUILD_STATUS=0
-    else
-        BUILD_STATUS=$?
+    set -o pipefail
+    ARCH=arm64 CROSS_COMPILE=aarch64-unknown-linux-gnu- make -j3 HOSTCFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89 -fcommon" Image dtbs modules 2>&1 | tee -a "$LOG_FILE"
+    PIPE_STATUS=( "${PIPESTATUS[@]}" )
+    BUILD_STATUS=${PIPE_STATUS[0]}
+    if [ "${PIPE_STATUS[1]}" -ne 0 ] && [ "$BUILD_STATUS" -eq 0 ]; then
+        BUILD_STATUS=${PIPE_STATUS[1]}
     fi
-    tail -n 80 "$LOG_FILE"
     echo >> "$LOG_FILE"
     printf '===== BUILD EXIT STATUS: %s =====\n' "$BUILD_STATUS" | tee -a "$LOG_FILE"
     exit "$BUILD_STATUS"
