@@ -42,7 +42,15 @@ jobs:
           grep -Fq 'source "drivers/staging/Kconfig"' drivers/Kconfig || {
             echo "::error::The top-level driver Kconfig does not source staging/Kconfig"; exit 1;
           }
-          grep -Eq '^obj-\\$\\(CONFIG_STAGING\\)[[:space:]]*\\+= staging/          grep -Fq 'source "drivers/staging/imgtec/Kconfig"' drivers/staging/Kconfig || {
+          grep -Fq 'obj-$(CONFIG_STAGING)' drivers/Makefile || {
+            echo "::error::The top-level driver Makefile does not descend into staging/"; exit 1;
+          }
+          grep -Fq '+= staging/' drivers/Makefile || {
+            echo "::error::The top-level driver Makefile does not add the staging directory"; exit 1;
+          }
+          grep -Fq 'source "drivers/staging/imgtec/Kconfig"' drivers/staging/Kconfig || {
+            echo "::error::The Imagination staging Kconfig is not sourced"; exit 1;
+          }
             echo "::error::The Imagination staging Kconfig is not sourced"; exit 1;
           }
           grep -Fq 'source "drivers/staging/imgtec/rogue/Kconfig"' drivers/staging/imgtec/Kconfig || {
