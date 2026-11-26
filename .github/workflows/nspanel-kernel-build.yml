@@ -36,6 +36,359 @@ jobs:
           grep -Fqx 'CONFIG_DRM=y' .config || {
             echo "::error::DRM must be enabled for the PowerVR Rogue DRM glue"; exit 1;
           }
+          grep -Fqx 'CONFIG_STAGING=y' .config || {
+            echo "::error::The staging subsystem must be enabled for the in-tree Rogue driver"; exit 1;
+          }
+          grep -Fq 'source "drivers/staging/Kconfig"' drivers/Kconfig || {
+            echo "::error::The top-level driver Kconfig does not source staging/Kconfig"; exit 1;
+          }
+          grep -Eq '^obj-\\$\\(CONFIG_STAGING\\)[[:space:]]*\\+= staging/          grep -Fq 'source "drivers/staging/imgtec/Kconfig"' drivers/staging/Kconfig || {
+            echo "::error::The Imagination staging Kconfig is not sourced"; exit 1;
+          }
+          grep -Fq 'source "drivers/staging/imgtec/rogue/Kconfig"' drivers/staging/imgtec/Kconfig || {
+            echo "::error::The staging Rogue Kconfig is not sourced"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_N)' drivers/staging/Makefile || {
+            echo "::error::The staging Rogue directory is not wired into Kbuild"; exit 1;
+          }
+          grep -Fq 'obj-y += rogue/' drivers/staging/imgtec/Makefile || {
+            echo "::error::The staging Rogue subdirectory is not wired into Kbuild"; exit 1;
+          }
+          grep -Fq 'obj-$(CONFIG_POWERVR_ROGUE_N) += pvrsrvkm.o' drivers/staging/imgtec/rogue/Makefile || {
+            echo "::error::The staging Rogue kernel module target is missing"; exit 1;
+          }
+          grep -Fq 'pvrsrvkm-$(CONFIG_DRM) += ../pvr_drm.o' drivers/staging/imgtec/rogue/Makefile || {
+            echo "::error::The PowerVR DRM integration object is missing"; exit 1;
+          }
+          if [ -n "${{ github.event.pull_request.base.sha || '' }}" ]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA"
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            git -c core.whitespace=cr-at-eol diff --check HEAD^ HEAD
+          fi
+          for driver in rtl8188eu rtl8188fu rtl8189es rtl8189fs rtl8723bs rtl8723bu rtl8723cs rtl8723ds rtl8822be; do
+            header="drivers/net/wireless/rockchip_wlan/$driver/include/ieee80211.h"
+            grep -Fq 'frame_ctl __attribute__((aligned(2)))' "$header" || {
+              echo "::error::Missing 2-byte frame_ctl alignment in $header"; exit 1;
+            }
+          done
+          for driver in rtl8188eu rtl8188fu rtl8189es rtl8189fs rtl8192cu rtl8192du rtl8723au rtl8723bs-vq0 rtl8723bs rtl8723bu rtl8723cs rtl8723ds rtl8812au rtl8822be; do
+            header="drivers/net/wireless/rockchip_wlan/$driver/include/osdep_service.h"
+            source="drivers/net/wireless/rockchip_wlan/$driver/os_dep/osdep_service.c"
+            for file in "$header" "$source"; do
+              grep -Eq '_rtw_memcmp\(const void \*dst, const void \*src, u32 sz\)' "$file" || {
+                echo "::error::Non-const _rtw_memcmp interface in $file"; exit 1;
+              }
+            done
+          done
+          if git grep -n -F 'rtw_sprintf(thread_name, 20, "%s-"ADPT_FMT, thread_name, ADPT_ARG(padapter));' -- drivers/net/wireless/rockchip_wlan; then
+            echo "::error::Overlapping thread_name snprintf pattern remains"; exit 1
+          fi
+          if git grep -n -F '&pmlmeinfo->network.Ssid' -- drivers/net/wireless/rockchip_wlan; then
+            echo "::error::Packed WLAN_BSSID_EX SSID pointers must use aligned local copies"; exit 1
+          fi
+          for packed_ssid_ref in '&(pmlmeinfo->network.Ssid)' '&(scanned->network.Ssid)' '&(pnetwork->Ssid)'; do
+            if git grep -n -F "$packed_ssid_ref" -- drivers/net/wireless/rockchip_wlan; then
+              echo "::error::Direct address of packed WLAN_BSSID_EX SSID remains: $packed_ssid_ref"; exit 1
+            fi
+          done
+          rtl8723cs_cfg80211="drivers/net/wireless/rockchip_wlan/rtl8723cs/os_dep/linux/ioctl_cfg80211.c"
+          if grep -n -F '&pnetwork->network.Ssid' "$rtl8723cs_cfg80211"; then
+            echo "::error::rtl8723cs must copy packed WLAN_BSSID_EX SSID into aligned local storage"; exit 1
+          fi
+          if git grep -n -E 'rtw_validate_ssid[[:space:]]*\([[:space:]]*&[[:space:]]*\([^)]*network\.Ssid' -- drivers/net/wireless/rockchip_wlan; then
+            echo "::error::rtw_validate_ssid must receive an aligned local SSID copy, never a packed WLAN_BSSID_EX member"; exit 1
+          fi
+          for packed_pppoe_ref in '&(ph->sid)' '&ph->sid'; do
+            if git grep -n -F "$packed_pppoe_ref" -- drivers/net/wireless/rockchip_wlan; then
+              echo "::error::Direct address of packed PPPoE session ID remains: $packed_pppoe_ref"; exit 1
+            fi
+          done
+          for driver in rtl8723cs rtl8822be; do
+            source="drivers/net/wireless/rockchip_wlan/$driver/os_dep/linux/ioctl_linux.c"
+            if grep -nE 'sprintf[[:space:]]*\([[:space:]]*extra[[:space:]]*,[[:space:]]*"[^"]*%s[^"]*"[[:space:]]*,[[:space:]]*extra([[:space:]]*,|[[:space:]]*\))' "$source"; then
+              echo "::error::Overlapping sprintf source/destination remains in $source"; exit 1
+            fi
+          done
+
+  build:
+    name: Build and package on dell5300
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: validate
+    permissions:
+      contents: write
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+      - name: Initialize diagnostics
+        shell: bash
+        run: |
+          set -Eeo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          LOG_FILE="$PWD/nspanel-kernel-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+          echo "NSPANEL_BUILD_LOG=$LOG_FILE" >> "$GITHUB_ENV"
+          {
+            echo "===== Repository: $GITHUB_REPOSITORY ====="
+            echo "===== Ref: $GITHUB_REF ====="
+            echo "===== Requested SHA: $GITHUB_SHA ====="
+            echo "===== Runner: $(hostname -f 2>/dev/null || hostname) ====="
+          } | tee "$LOG_FILE"
+      - name: Validate build environment
+        shell: bash
+        run: |
+          set -Eeo pipefail
+          for tool in make flock aarch64-unknown-linux-gnu-gcc depmod tar sha256sum; do
+            command -v "$tool" >/dev/null || { echo "::error::Missing tool: $tool"; exit 1; }
+          done
+          test -s .config
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          free -h
+          df -h . "${RUNNER_TEMP:-/tmp}" /tmp
+          aarch64-unknown-linux-gnu-gcc --version | head -n 1
+      - name: Compile through repository's canonical script
+        id: compile
+        shell: bash
+        env:
+          NSPANEL_CI: "1"
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -Eeo pipefail
+          mkdir -p "$TMPDIR"
+          ./NSPanel-compile.sh
+      - name: Analyze diagnostics through repository's canonical script
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$NSPANEL_BUILD_LOG" ]; then
+            DIAGNOSTICS_FILE="$PWD/nspanel-kernel-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+            ./NSPanel-check-compile-errors.sh "$NSPANEL_BUILD_LOG" | tee "$DIAGNOSTICS_FILE"
+            echo "NSPANEL_DIAGNOSTICS=$DIAGNOSTICS_FILE" >> "$GITHUB_ENV"
+          fi
+      - name: Package kernel, DTBs and modules
+        if: success()
+        shell: bash
+        run: |
+          set -Eeo pipefail
+          PACKAGE_ROOT="$PWD/dist/package"
+          mkdir -p "$PACKAGE_ROOT/boot/dtb" "$PACKAGE_ROOT/config"
+          test -s arch/arm64/boot/Image
+          cp arch/arm64/boot/Image "$PACKAGE_ROOT/boot/Image"
+          cp .config "$PACKAGE_ROOT/config/kernel.config"
+          if [ -s System.map ]; then cp System.map "$PACKAGE_ROOT/boot/System.map"; fi
+          DTB_COUNT=$(find arch/arm64/boot/dts -type f -name '*.dtb' | wc -l)
+          [ "$DTB_COUNT" -gt 0 ] || { echo "::error::No DTBs found"; exit 1; }
+          find arch/arm64/boot/dts -type f -name '*.dtb' -exec cp --parents {} "$PACKAGE_ROOT/" \;
+          ARCH=arm64 CROSS_COMPILE=aarch64-unknown-linux-gnu- make -j3 \
+            HOSTCFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89 -fcommon" \
+            modules_install INSTALL_MOD_PATH="$PACKAGE_ROOT/rootfs"
+          KERNEL_RELEASE=$(make -s ARCH=arm64 kernelrelease)
+          test -d "$PACKAGE_ROOT/rootfs/lib/modules/$KERNEL_RELEASE"
+          BUILD_COMMIT=$(git rev-parse HEAD)
+          PACKAGE="$PWD/dist/nspanel-kernel-$KERNEL_RELEASE-${BUILD_COMMIT:0:12}.tar.gz"
+          tar -czf "$PACKAGE" -C "$PACKAGE_ROOT" .
+          sha256sum "$PACKAGE" > "$PACKAGE.sha256"
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "commit=$BUILD_COMMIT"
+            echo "ref=$GITHUB_REF"
+            echo "kernel_release=$KERNEL_RELEASE"
+            echo "dtb_count=$DTB_COUNT"
+            echo "compiler=$(aarch64-unknown-linux-gnu-gcc -dumpfullversion)"
+            echo "built_at=$(date --iso-8601=seconds)"
+          } | tee dist/manifest.txt
+      - name: Publish build summary
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo '## NSPanel kernel CI/CD'
+            echo "- **Requested SHA:** $GITHUB_SHA"
+            BUILT_SHA=$(git rev-parse HEAD)
+            echo "- **Built SHA:** $BUILT_SHA"
+            echo "- **Job:** $JOB_STATUS"
+            if [ -f "$NSPANEL_BUILD_LOG" ]; then
+              echo "- **Warnings:** $(grep -Ec 'warning:' "$NSPANEL_BUILD_LOG" || true)"
+              echo "- **Errors:** $(grep -Ec 'error:|fatal error:|undefined reference|Error [0-9]+' "$NSPANEL_BUILD_LOG" || true)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish build logs to the target branch
+        if: always() && github.ref == 'refs/heads/fix/rockchip-gem-zero-size'
+        shell: bash
+        run: |
+          set -Eeo pipefail
+          log_files=()
+          for candidate in "${NSPANEL_BUILD_LOG:-}" "${NSPANEL_DIAGNOSTICS:-}"; do
+            [ -n "$candidate" ] || continue
+            case "$candidate" in
+              "$GITHUB_WORKSPACE"/*) candidate="${candidate#"$GITHUB_WORKSPACE"/}" ;;
+            esac
+            if [ -s "$candidate" ]; then
+              log_files+=("$candidate")
+            fi
+          done
+          if [ "${#log_files[@]}" -eq 0 ]; then
+            echo "No build log files were produced; nothing to publish."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f -- "${log_files[@]}"
+          if git diff --cached --quiet; then
+            echo "Build logs are already present on the target branch."
+            exit 0
+          fi
+          git commit -m "ci: archive NSPanel kernel build logs [skip ci]"
+          for attempt in 1 2 3; do
+            git fetch origin fix/rockchip-gem-zero-size
+            if ! git rebase origin/fix/rockchip-gem-zero-size; then
+              git rebase --abort
+              echo "::error::Could not rebase the log archive commit onto the target branch."
+              exit 1
+            fi
+            if git push origin HEAD:refs/heads/fix/rockchip-gem-zero-size; then
+              echo "Published build logs to fix/rockchip-gem-zero-size."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Could not push the build log archive after three attempts."
+          exit 1
+
+      - name: Upload logs and deliverables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nspanel-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            nspanel-kernel-build-*.log
+            nspanel-kernel-diagnostics-*.txt
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/manifest.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish versioned GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nspanel-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/dist/*.tar.gz
+            release-assets/dist/*.sha256
+            release-assets/dist/manifest.txt
+
+  report:
+    name: Publish complete CI status
+    if: always()
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Report run, jobs, remote branch and artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const branch = pr ? pr.head.ref : (context.ref.startsWith("refs/heads/") ? context.ref.slice(11) : context.ref);
+            const sourceRepo = (pr && pr.head.repo) ? pr.head.repo.full_name : owner + "/" + repo;
+            const parts = sourceRepo.split("/");
+            const runUrl = context.serverUrl + "/" + owner + "/" + repo + "/actions/runs/" + context.runId;
+            const jobResults = [
+              ["Source validation", "${{ needs.validate.result }}"],
+              ["Build on dell5300", "${{ needs.build.result }}"]
+            ];
+            let remoteHead = "unavailable";
+            try {
+              const response = await github.rest.repos.getBranch({
+                owner: parts[0], repo: parts[1], branch
+              });
+              remoteHead = response.data.commit.sha;
+            } catch (error) {
+              remoteHead = "unavailable (" + (error.status || "API error") + ": " + error.message + ")";
+            }
+            let jobs = [];
+            try {
+              const response = await github.rest.actions.listJobsForWorkflowRun({
+                owner, repo, run_id: context.runId, filter: "latest"
+              });
+              jobs = response.data.jobs;
+            } catch (error) {
+              core.warning("Could not retrieve job details: " + error.message);
+            }
+            let artifacts = [];
+            try {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: context.runId
+              });
+              artifacts = response.data.artifacts.filter(a => !a.expired);
+            } catch (error) {
+              core.warning("Could not retrieve artifacts: " + error.message);
+            }
+            const summary = core.summary
+              .addHeading("NSPanel kernel CI — complete run report")
+              .addTable([
+                [{data:"Field",header:true},{data:"Value",header:true}],
+                ["Branch", sourceRepo + " / " + branch],
+                ["Requested commit", context.sha],
+                ["Current remote branch HEAD", remoteHead],
+                ["Run", context.runId + " / attempt " + context.runAttempt],
+                ["Run URL", runUrl]
+              ])
+              .addHeading("Required jobs")
+              .addTable([
+                [{data:"Job",header:true},{data:"Result",header:true}],
+                ...jobResults
+              ]);
+            if (jobs.length) {
+              summary.addHeading("Job details")
+                .addTable([
+                  [{data:"Job",header:true},{data:"Status",header:true},{data:"Conclusion",header:true},{data:"Runner",header:true}],
+                  ...jobs.map(j => [j.name, j.status, j.conclusion || "—", j.runner_name || "—"])
+                ]);
+              for (const job of jobs) {
+                const failed = (job.steps || []).filter(s => s.conclusion === "failure");
+                if (failed.length) {
+                  summary.addHeading("Failed steps: " + job.name, 3)
+                    .addList(failed.map(s => s.name + " (step " + s.number + ")"));
+                }
+              }
+            }
+            summary.addHeading("Artifacts");
+            if (artifacts.length) {
+              summary.addTable([
+                [{data:"Artifact",header:true},{data:"Size",header:true},{data:"Download",header:true}],
+                ...artifacts.map(a => [a.name, (a.size_in_bytes / 1048576).toFixed(1) + " MiB", a.archive_download_url])
+              ]);
+            } else {
+              summary.addRaw("No downloadable artifacts were published for this run.");
+            }
+            summary.addLink("Open full GitHub Actions run", runUrl).write();
+            core.info("Requested SHA: " + context.sha + "; remote HEAD: " + remoteHead);
+ drivers/Makefile || {
+            echo "::error::The top-level driver Makefile does not descend into staging/"; exit 1;
+          }
           grep -Fq 'source "drivers/staging/imgtec/Kconfig"' drivers/staging/Kconfig || {
             echo "::error::The Imagination staging Kconfig is not sourced"; exit 1;
           }
